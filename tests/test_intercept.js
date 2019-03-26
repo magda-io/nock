@@ -16,6 +16,7 @@ var restify = require('restify-clients');
 var domain  = require('domain');
 var hyperquest = require('hyperquest');
 var async = require('async');
+var httpProxy = require("http-proxy");
 
 var ssl = require('./ssl')
 
@@ -5743,4 +5744,48 @@ test("teardown", function(t) {
 
   t.deepEqual(leaks, [], 'No leaks');
   t.end();
+});
+
+test('works when headers removed by http-proxy', function(t) {
+  nock.enableNetConnect();
+
+  var serviceScope = nock('http://service', {
+    badheaders: ['authorization']
+  })
+    .get('/endpoint')
+    .reply(200);
+
+  const proxy = httpProxy.createProxyServer({
+    prependUrl: false
+  });
+
+  proxy.on('proxyReq', function(proxyReq, req, res) {
+    proxyReq.removeHeader('authorization');
+  });
+
+  const server = http.createServer((request, response) => {
+    proxy.web(request, response, { target: 'http://service' });
+  })
+
+  server.listen(() => {
+    var options = {
+      uri: `http://localhost:${server.address().port}/endpoint`,
+      method: 'GET',
+      headers: {
+        authorization: 'blah'
+      }
+    };
+
+    mikealRequest(options, function(err, resp, body) {
+      nock.disableNetConnect();
+      if (err) {
+        t.error(err);
+      } else {
+        t.equal(200, resp.statusCode);
+        serviceScope.done();
+        server.close(t.end);
+      }
+    });
+  });
+
 });
